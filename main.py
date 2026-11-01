@@ -36,26 +36,28 @@ def health():
 def call_openai(prompt: str):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
     payload = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
+        "temperature": 0.7,
     }
     response = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers=headers,
         json=payload,
-        timeout=60
+        timeout=60,
     )
     if response.status_code != 200:
         raise RuntimeError(f"OpenAI error: {response.text}")
     data = response.json()
-    return data["choices"][0]["message"][content]
+    return data["choices"][0]["message"]["content"]
 
 
 def call_gemini(prompt: str):
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY / GEMINI_API_KEY is not configured")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     response = requests.post(url, json=payload, timeout=60)
@@ -65,22 +67,57 @@ def call_gemini(prompt: str):
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def planner(prompt: str):
-    return f"Plan for: {prompt}"
+def plan_prompt(prompt: str):
+    return (
+        "You are a project planner. Break the user's request into clear steps and list the required outputs.\n"
+        f"Request: {prompt}"
+    )
 
 
 def researcher(plan: str):
-    if SERPER_API_KEY:
-        return f"Research insights for: {plan}"
-    return "No external search configured"
+    if not SERPER_API_KEY:
+        return "No external search configured. Proceed with general reasoning."
+
+    headers = {
+        "X-API-KEY": SERPER_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {"q": plan, "num": 3}
+    response = requests.post(
+        "https://google.serper.dev/search",
+        headers=headers,
+        json=payload,
+        timeout=60,
+    )
+    if response.status_code != 200:
+        return f"Search unavailable: {response.text}"
+
+    data = response.json()
+    results = data.get("organic", [])
+    if not results:
+        return "No search results returned."
+
+    snippets = []
+    for item in results[:3]:
+        title = item.get("title", "")
+        snippet = item.get("snippet", "")
+        link = item.get("link", "")
+        snippets.append(f"- {title}: {snippet} ({link})")
+    return "\n".join(snippets)
 
 
 def writer(plan: str, research: str):
-    return f"{plan}\n\n{research}"
+    return (
+        "Draft response:\n"
+        f"Plan:\n{plan}\n\nResearch:\n{research}"
+    )
 
 
 def validator(draft: str):
-    return draft.strip()
+    cleaned = draft.strip()
+    if not cleaned:
+        raise ValueError("Generated response is empty")
+    return cleaned
 
 
 @app.post("/run")
@@ -93,6 +130,7 @@ def single_agent(payload: RunRequest):
             answer = call_openai(payload.prompt)
         else:
             answer = call_gemini(payload.prompt)
+
         return {
             "status": "ok",
             "prompt": payload.prompt,
@@ -108,23 +146,27 @@ def single_agent(payload: RunRequest):
 
 @app.post("/run-multi")
 def multi_agent(payload: RunRequest):
-    plan = planner(payload.prompt)
-    research = researcher(plan)
-    draft = writer(plan, research)
-    final = validator(draft)
-    return {
-        "status": "ok",
-        "prompt": payload.prompt,
-        "answer": final,
-        "mode": "multi-agent",
-        "plan": plan,
-        "research": research,
-        "openai_key_present": bool(OPENAI_API_KEY),
-        "google_key_present": bool(GOOGLE_API_KEY),
-        "serper_key_present": bool(SERPER_API_KEY),
-    }
+    try:
+        plan = call_openai(plan_prompt(payload.prompt)) if OPENAI_API_KEY else call_gemini(plan_prompt(payload.prompt))
+        research = researcher(plan)
+        draft = writer(plan, research)
+        final = validator(draft)
+        return {
+            "status": "ok",
+            "prompt": payload.prompt,
+            "answer": final,
+            "mode": "multi-agent",
+            "plan": plan,
+            "research": research,
+            "openai_key_present": bool(OPENAI_API_KEY),
+            "google_key_present": bool(GOOGLE_API_KEY),
+            "serper_key_present": bool(SERPER_API_KEY),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
