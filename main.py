@@ -33,16 +33,14 @@ def health():
     return {"status": "ok"}
 
 
-def ask_openai(prompt: str):
+def call_openai(prompt: str):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
         "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7
     }
     response = requests.post(
@@ -54,16 +52,12 @@ def ask_openai(prompt: str):
     if response.status_code != 200:
         raise RuntimeError(f"OpenAI error: {response.text}")
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    return data["choices"][0]["message"][content]
 
 
-def ask_gemini(prompt: str):
+def call_gemini(prompt: str):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GOOGLE_API_KEY}"
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
     response = requests.post(url, json=payload, timeout=60)
     if response.status_code != 200:
         raise RuntimeError(f"Gemini error: {response.text}")
@@ -71,26 +65,64 @@ def ask_gemini(prompt: str):
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
+def planner(prompt: str):
+    return f"Plan for: {prompt}"
+
+
+def researcher(plan: str):
+    if SERPER_API_KEY:
+        return f"Research insights for: {plan}"
+    return "No external search configured"
+
+
+def writer(plan: str, research: str):
+    return f"{plan}\n\n{research}"
+
+
+def validator(draft: str):
+    return draft.strip()
+
+
 @app.post("/run")
-def run_model(payload: RunRequest):
+def single_agent(payload: RunRequest):
     if not OPENAI_API_KEY and not GOOGLE_API_KEY:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY or GOOGLE_API_KEY not found")
 
     try:
         if OPENAI_API_KEY:
-            answer = ask_openai(payload.prompt)
+            answer = call_openai(payload.prompt)
         else:
-            answer = ask_gemini(payload.prompt)
+            answer = call_gemini(payload.prompt)
         return {
             "status": "ok",
             "prompt": payload.prompt,
             "answer": answer,
+            "mode": "single-agent",
             "openai_key_present": bool(OPENAI_API_KEY),
             "google_key_present": bool(GOOGLE_API_KEY),
-            "serper_key_present": bool(SERPER_API_KEY)
+            "serper_key_present": bool(SERPER_API_KEY),
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/run-multi")
+def multi_agent(payload: RunRequest):
+    plan = planner(payload.prompt)
+    research = researcher(plan)
+    draft = writer(plan, research)
+    final = validator(draft)
+    return {
+        "status": "ok",
+        "prompt": payload.prompt,
+        "answer": final,
+        "mode": "multi-agent",
+        "plan": plan,
+        "research": research,
+        "openai_key_present": bool(OPENAI_API_KEY),
+        "google_key_present": bool(GOOGLE_API_KEY),
+        "serper_key_present": bool(SERPER_API_KEY),
+    }
 
 
 if __name__ == "__main__":
