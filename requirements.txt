@@ -1,3 +1,8 @@
 fastapi
 uvicorn
+gunicorn
+requests
+python-dotenv
 pydantic
+openai
+google-generativeai

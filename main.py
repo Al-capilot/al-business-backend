@@ -1,8 +1,10 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+import os
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import requests
 
-app = FastAPI(title="Al Business Agent API")
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -12,49 +14,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class ChatRequest(BaseModel):
-    prompt: str
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "") or GEMINI_API_KEY
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
 
-@app.get("/api/health")
-async def health():
-    return {
-        "ok": True,
-        "status": "running",
-        "service": "al-business-agent"
-    }
+class RunRequest(BaseModel):
+    prompt: str = "Maliyyə və AI trendlərini araşdır."
 
-@app.post("/api/chat")
-async def chat(req: ChatRequest):
-    prompt = req.prompt.strip()
+@app.get("/")
+def home():
+    return {"status": "ok", "message": "al-business-backend is running on Render"}
 
-    if not prompt:
-        return {
-            "status": "error",
-            "message": "Prompt is empty."
-        }
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
-    response_text = (
-        "B2B marketplace strategy hazırdır.\n\n"
-        "1) Buyer and supplier onboarding\n"
-        "2) Product catalog and RFQ flow\n"
-        "3) Supplier verification and scoring\n"
-        "4) Dashboard and analytics\n"
-        "5) Pricing and subscription plan\n"
-        "6) MVP roadmap and deployment guide\n\n"
-        f"İstədiyiniz sorğu: {prompt}"
-    )
+@app.post("/run")
+def run_model(payload: RunRequest):
+    if not OPENAI_API_KEY and not GOOGLE_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY or GEMINI_API_KEY not found in Render env")
 
     return {
         "status": "ok",
-        "message": "Task qəbul edildi.",
-        "prompt": prompt,
-        "response": response_text
+        "message": "Backend is connected and ready.",
+        "prompt": payload.prompt,
+        "gemini_key_present": bool(GOOGLE_API_KEY),
+        "openai_key_present": bool(OPENAI_API_KEY),
+        "serper_key_present": bool(SERPER_API_KEY),
     }
 
-@app.get("/")
-async def root():
-    return {
-        "message": "Al Business Agent API is running.",
-        "health": "/api/health",
-        "chat": "/api/chat"
-    }
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
